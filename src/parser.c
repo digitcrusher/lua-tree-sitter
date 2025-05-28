@@ -103,24 +103,28 @@ static const char *read(
 	InputContext *ctx = payload;
 	lua_State *L = ctx->L;
 
+	// We delay popping the results of the reader function until the next
+	// read cycle in order to prevent the requested chunk from being garbage
+	// collected in a multithreaded Lua environment.
+	lua_pop(L, 2);
 	lua_pushvalue(L, -1);
 	lua_pushinteger(L, byte_index);
 	LTS_push_point(L, position);
 	if (lua_pcall(L, 2, 2, 0) != 0) {
 		ctx->status = LTS_INPUT_RTERROR;
-		goto fail_no_pop;
+		goto fail;
 	}
 
 	switch (lua_type(L, -2)) {
 	case LUA_TNIL:
-		goto fail_pop;
+		goto fail;
 
 	case LUA_TSTRING:
 		break;
 
 	default:
 		ctx->status = LTS_INPUT_RETTYPE_1;
-		goto fail_pop;
+		goto fail;
 	}
 
 	size_t offset;
@@ -135,23 +139,20 @@ static const char *read(
 
 	default:
 		ctx->status = LTS_INPUT_RETTYPE_2;
-		goto fail_pop;
+		goto fail;
 	}
 
 	size_t len;
 	const char *str = lua_tolstring(L, -2, &len);
-	lua_pop(L, 2);
 
-	if (offset > len) goto fail_no_pop;
+	if (offset > len) goto fail;
 	if (offset < 1) offset += len + 1;
 	if (offset < 1) offset = 1;
 
 	*bytes_read = len - offset + 1;
 	return str + offset - 1;
 
-fail_pop:
-	lua_pop(L, 2);
-fail_no_pop:
+fail:
 	*bytes_read = 0;
 	return NULL;
 }
@@ -172,6 +173,8 @@ static int LTS_parser_parse(lua_State *L) {
 		.encoding = TSInputEncodingUTF8,
 	};
 
+	lua_pushnil(L);
+	lua_pushnil(L);
 	TSTree *tree = ts_parser_parse(self, old_tree, input);
 
 	switch (ctx.status) {
